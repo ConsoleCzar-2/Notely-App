@@ -16,11 +16,55 @@ Browser
 
 | Service | Port | Stack | Responsibility |
 |---|---:|---|---|
-| Frontend | 8080 | React + Vite | UI, session state, API proxy target |
-| API Gateway | 3000 | Node + Express | Routing, auth verification, rate limiting, health checks |
-| Auth Service | 4001 | Node + Express | Login, register, logout, token handling |
-| User Service | 4002 | Node + Express | Profile CRUD |
-| Notes Service | 4003 | Node + Express + MongoDB | Notes CRUD, pinning, archiving, search |
+| **Frontend** | 8080 | React + Vite | UI, session state, API proxy target |
+| **API Gateway** | 3000 | Node + Express | Routing, auth verification, rate limiting, health checks |
+| **Auth Service** | 4001 | Node + Express | Login, register, logout, token handling |
+| **User Service** | 4002 | Node + Express | Profile CRUD |
+| **Notes Service** | 4003 | Node + Express + MongoDB | Notes CRUD, pinning, archiving, search |
+
+## Frameworks and Tools by Layer
+
+### Frontend Layer (Port 8080)
+
+- **React**: component-based UI rendering and state-driven interactions.
+- **Vite**: fast local development server and production bundling.
+- **Nginx**: serves static frontend assets and proxies `/api` and health routes to the gateway.
+
+### API Gateway Layer (Port 3000)
+
+- **Node.js + Express**: single ingress service and route orchestration.
+- **node-fetch**: forwards requests to downstream microservices.
+- **express-rate-limit**: protects endpoints from bursts/abuse.
+- **Morgan + Winston**: request logging and structured service logs.
+- **Gateway auth middleware**: verifies JWT and forwards user context headers.
+
+### Auth Service Layer (Port 4001)
+
+- **Node.js + Express**: authentication endpoints.
+- **jsonwebtoken**: token generation and verification.
+- **bcryptjs**: password hashing and password checks.
+- **ioredis + Redis**: token blacklist storage for logout/session invalidation.
+- **uuid**: stable user id generation during registration.
+- **In-memory credential store (`Map`)**: lightweight credential persistence in current implementation.
+
+### User Service Layer (Port 4002)
+
+- **Node.js + Express**: profile APIs.
+- **pg (node-postgres) + PostgreSQL**: persistent user profile storage.
+- **SQL upsert pattern**: create-or-update profile records in a single operation.
+
+### Notes Service Layer (Port 4003)
+
+- **Node.js + Express**: notes APIs.
+- **Mongoose + MongoDB**: document schema/modeling and persistence.
+- **MongoDB text indexes**: keyword search across title/content/tags.
+
+### Infrastructure and Testing
+
+- **Docker Compose**: orchestrates all containers and internal networking.
+- **MongoDB/PostgreSQL/Redis containers**: data stores for notes, profiles, and auth token state.
+- **Jest + Supertest**: backend API and integration tests.
+- **Nodemon**: automatic restart for local backend development.
 
 ## Getting Started
 
