@@ -125,21 +125,51 @@ const updateNote = async (req, res, next) => {
   }
 };
 
-// ─── Delete Note ──────────────────────────────────────────────────────────────
+// ─── Delete Note (Soft Delete) ────────────────────────────────────────────────
 /**
  * DELETE /notes/:id
+ * Soft deletes a note by setting isDeleted=true and deletedAt
  */
 const deleteNote = async (req, res, next) => {
   try {
-    const note = await Note.findOneAndDelete({ _id: req.params.id, userId: req.user.userId });
+    const note = await Note.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user.userId, isDeleted: false },
+      { $set: { isDeleted: true, deletedAt: new Date() } },
+      { new: true }
+    );
 
     if (!note) {
       return res.status(404).json({ success: false, message: 'Note not found' });
     }
 
-    logger.info(`Note deleted: ${req.params.id}`);
+    logger.info(`Note soft deleted: ${req.params.id}`);
 
     return res.json({ success: true, message: 'Note deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── Restore Note ─────────────────────────────────────────────────────────────
+/**
+ * POST /notes/:id/restore
+ * Restores a soft-deleted note
+ */
+const restoreNote = async (req, res, next) => {
+  try {
+    const note = await Note.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user.userId, isDeleted: true },
+      { $set: { isDeleted: false, deletedAt: null } },
+      { new: true }
+    );
+
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Deleted note not found' });
+    }
+
+    logger.info(`Note restored: ${req.params.id}`);
+
+    return res.json({ success: true, data: note });
   } catch (err) {
     next(err);
   }
@@ -188,4 +218,4 @@ const searchNotes = async (req, res, next) => {
   }
 };
 
-module.exports = { createNote, listNotes, getNote, updateNote, deleteNote, searchNotes };
+module.exports = { createNote, listNotes, getNote, updateNote, deleteNote, restoreNote, searchNotes };

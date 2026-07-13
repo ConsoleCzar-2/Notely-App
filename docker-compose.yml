@@ -11,21 +11,33 @@ services:
       - mongo_data:/data/db
     networks:
       - notes_network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   postgres:
     image: postgres:16-alpine
     container_name: notes_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: userdb
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: ${POSTGRES_DB:-userdb}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - notes_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-userdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -35,6 +47,12 @@ services:
       - "6379:6379"
     networks:
       - notes_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   # ─── Microservices ─────────────────────────────────────────────────
   auth-service:
@@ -43,15 +61,23 @@ services:
     restart: unless-stopped
     environment:
       PORT: 4001
-      JWT_SECRET: supersecret_jwt_key_change_in_prod
-      JWT_EXPIRES_IN: 7d
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       REDIS_URL: redis://redis:6379
-    ports:
-      - "4001:4001"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-userdb}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - notes_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   user-service:
     build: ./user-service
@@ -59,14 +85,19 @@ services:
     restart: unless-stopped
     environment:
       PORT: 4002
-      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/userdb
-      JWT_SECRET: supersecret_jwt_key_change_in_prod
-    ports:
-      - "4002:4002"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-userdb}
+      JWT_SECRET: ${JWT_SECRET}
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - notes_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   notes-service:
     build: ./notes-service
@@ -75,13 +106,18 @@ services:
     environment:
       PORT: 4003
       MONGO_URI: mongodb://mongo:27017/notesdb
-      JWT_SECRET: supersecret_jwt_key_change_in_prod
-    ports:
-      - "4003:4003"
+      JWT_SECRET: ${JWT_SECRET}
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     networks:
       - notes_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   api-gateway:
     build: ./api-gateway
@@ -92,15 +128,24 @@ services:
       AUTH_SERVICE_URL: http://auth-service:4001
       USER_SERVICE_URL: http://user-service:4002
       NOTES_SERVICE_URL: http://notes-service:4003
-      JWT_SECRET: supersecret_jwt_key_change_in_prod
+      JWT_SECRET: ${JWT_SECRET}
     ports:
       - "3000:3000"
     depends_on:
-      - auth-service
-      - user-service
-      - notes-service
+      auth-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      notes-service:
+        condition: service_healthy
     networks:
       - notes_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   frontend:
     build: ./frontend
@@ -109,7 +154,8 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - api-gateway
+      api-gateway:
+        condition: service_healthy
     networks:
       - notes_network
 

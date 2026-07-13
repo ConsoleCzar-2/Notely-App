@@ -158,10 +158,10 @@ describe('Notes Service', () => {
     });
   });
 
-  // ─── Delete Note ─────────────────────────────────────────────────────────────
+  // ─── Delete Note (Soft Delete) ──────────────────────────────────────────────
   describe('DELETE /notes/:id', () => {
-    it('deletes a note', async () => {
-      Note.findOneAndDelete.mockResolvedValueOnce(mockNote);
+    it('soft deletes a note', async () => {
+      Note.findOneAndUpdate.mockResolvedValueOnce({ ...mockNote, isDeleted: true, deletedAt: new Date() });
 
       const res = await request(app)
         .delete(`/notes/${mockNote._id}`)
@@ -172,10 +172,35 @@ describe('Notes Service', () => {
     });
 
     it('returns 404 for missing note', async () => {
-      Note.findOneAndDelete.mockResolvedValueOnce(null);
+      Note.findOneAndUpdate.mockResolvedValueOnce(null);
 
       const res = await request(app)
         .delete(`/notes/${new mongoose.Types.ObjectId()}`)
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // ─── Restore Note ────────────────────────────────────────────────────────────
+  describe('POST /notes/:id/restore', () => {
+    it('restores a soft-deleted note', async () => {
+      Note.findOneAndUpdate.mockResolvedValueOnce({ ...mockNote, isDeleted: false, deletedAt: null });
+
+      const res = await request(app)
+        .post(`/notes/${mockNote._id}/restore`)
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.isDeleted).toBe(false);
+    });
+
+    it('returns 404 when deleted note not found', async () => {
+      Note.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .post(`/notes/${new mongoose.Types.ObjectId()}/restore`)
         .set('Authorization', `Bearer ${makeToken()}`);
 
       expect(res.status).toBe(404);

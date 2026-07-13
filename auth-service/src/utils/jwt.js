@@ -2,12 +2,21 @@ const jwt = require('jsonwebtoken');
 const config = require('../config');
 
 /**
- * Sign a JWT with user payload
+ * Sign an access JWT with user payload
  * @param {object} payload - { userId, email, username }
  * @returns {string} signed token
  */
-const signToken = (payload) => {
+const signAccessToken = (payload) => {
   return jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
+};
+
+/**
+ * Sign a refresh JWT with user payload
+ * @param {object} payload - { userId, email, username }
+ * @returns {string} signed token
+ */
+const signRefreshToken = (payload) => {
+  return jwt.sign(payload, config.jwt.secret, { expiresIn: config.jwt.refreshExpiresIn });
 };
 
 /**
@@ -26,4 +35,4 @@ const decodeToken = (token) => {
   return jwt.decode(token);
 };
 
-module.exports = { signToken, verifyToken, decodeToken };
+module.exports = { signAccessToken, signRefreshToken, verifyToken, decodeToken };

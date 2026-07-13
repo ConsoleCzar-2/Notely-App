@@ -30,6 +30,15 @@ const noteSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true, // adds createdAt and updatedAt automatically
@@ -41,6 +50,15 @@ noteSchema.index({ title: 'text', content: 'text', tags: 'text' });
 
 // ─── Compound index for user's notes pagination ───────────────────────────────
 noteSchema.index({ userId: 1, createdAt: -1 });
+noteSchema.index({ userId: 1, isDeleted: 1, createdAt: -1 });
+
+// ─── Query Middleware: Exclude deleted notes by default ───────────────────────
+noteSchema.pre(/^find/, function () {
+  // Only apply if not explicitly querying for deleted notes
+  if (!this.getQuery().hasOwnProperty('isDeleted')) {
+    this.where({ isDeleted: false });
+  }
+});
 
 const Note = mongoose.model('Note', noteSchema);
 

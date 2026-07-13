@@ -1,10 +1,23 @@
 const winston = require('winston');
 
+/**
+ * Custom format to include correlation ID (request ID) in logs
+ */
+const correlationIdFormat = winston.format((info) => {
+  // Try to get correlation ID from various sources
+  const correlationId = info.correlationId || info.requestId || info['x-request-id'];
+  if (correlationId) {
+    info.correlationId = correlationId;
+  }
+  return info;
+});
+
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
+    correlationIdFormat(),
     winston.format.json()
   ),
   defaultMeta: { service: 'auth-service' },
@@ -12,12 +25,28 @@ const logger = winston.createLogger({
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message, service }) => {
-          return `[${timestamp}] [${service}] ${level}: ${message}`;
+        winston.format.printf(({ timestamp, level, message, service, correlationId, ...meta }) => {
+          const corrId = correlationId ? ` [${correlationId}]` : '';
+          const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+          return `[${timestamp}] [${service}]${corrId} ${level}: ${message}${metaStr}`;
         })
       ),
     }),
   ],
 });
+
+/**
+ * Create a child logger with additional context
+ * @param {Object} context - Additional context to include in all log messages
+ * @returns {winston.Logger} Child logger
+ */
+logger.child = (context) => {
+  return winston.createLogger({
+    level: logger.level,
+    format: logger.format,
+    defaultMeta: { ...logger.defaultMeta, ...context },
+    transports: logger.transports,
+  });
+};
 
 module.exports = logger;

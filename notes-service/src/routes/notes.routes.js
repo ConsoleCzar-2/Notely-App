@@ -7,8 +7,16 @@ const {
   getNote,
   updateNote,
   deleteNote,
+  restoreNote,
   searchNotes,
 } = require('./notes.controller');
+const {
+  validateCreateNote,
+  validateUpdateNote,
+  validateNoteId,
+  validateListNotes,
+  validateSearchNotes,
+} = require('../middleware/validation');
 
 // All routes require authentication
 router.use(authenticate);
@@ -17,21 +25,24 @@ router.use(authenticate);
 // treating "search" as an ObjectId parameter.
 
 // GET /notes/search?query=keyword
-router.get('/search', searchNotes);
+router.get('/search', validateSearchNotes, searchNotes);
 
 // POST /notes
-router.post('/', createNote);
+router.post('/', validateCreateNote, createNote);
 
 // GET /notes  — paginated list
-router.get('/', listNotes);
+router.get('/', validateListNotes, listNotes);
 
 // GET /notes/:id
-router.get('/:id', getNote);
+router.get('/:id', validateNoteId, getNote);
 
 // PUT /notes/:id
-router.put('/:id', updateNote);
+router.put('/:id', validateNoteId, validateUpdateNote, updateNote);
 
 // DELETE /notes/:id
-router.delete('/:id', deleteNote);
+router.delete('/:id', validateNoteId, deleteNote);
+
+// POST /notes/:id/restore - Restore a soft-deleted note
+router.post('/:id/restore', validateNoteId, restoreNote);
 
 module.exports = router;

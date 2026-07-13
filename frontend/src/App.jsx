@@ -1,417 +1,291 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  clearSession,
-  formatDate,
-  request,
-  restoreSession,
-  saveSession,
-  toTagsArray,
-} from './api';
+import { useEffect, useState, useCallback } from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { useNotes } from './hooks/useNotes';
+import { useProfile } from './hooks/useProfile';
+import { AuthPanel } from './components/AuthPanel';
+import { NotesList } from './components/NotesList';
+import { NoteEditor } from './components/NoteEditor';
+import { ProfilePanel } from './components/ProfilePanel';
+import { formatDate, sortNotes } from './utils/constants';
+import './styles.css';
 
-const emptyAuth = {
-  email: '',
-  username: '',
-  password: '',
-};
+// Inner App component that has access to Auth context
+const AppInner = () => {
+  const { 
+    user, 
+    token, 
+    loading: authLoading, 
+    isAuthenticated,
+    logout,
+    updateUser 
+  } = useAuth();
 
-const emptyNote = {
-  title: '',
-  content: '',
-  tags: '',
-};
+  const {
+    notes,
+    loading: notesLoading,
+    error: notesError,
+    pagination,
+    params,
+    fetchNotes,
+    createNote,
+    updateNote,
+    deleteNote,
+    searchNotes,
+    bulkAction,
+    setPage,
+    setArchived,
+    clearError: clearNotesError,
+  } = useNotes({ archived: false });
 
-const emptyProfile = {
-  fullName: '',
-  bio: '',
-  avatarUrl: '',
-};
+  const {
+    profile,
+    loading: profileLoading,
+    error: profileError,
+    fetchProfile,
+    updateProfile,
+    clearError: clearProfileError,
+  } = useProfile();
 
-const viewOptions = [
-    { value: 'active', label: 'Active' },
-    { value: 'archived', label: 'Archived' },
-    { value: 'all', label: 'All notes' },
-];
-
-const sortNotes = (notes) =>
-  [...notes].sort((left, right) => {
-    if (left.isPinned !== right.isPinned) {
-      return left.isPinned ? -1 : 1;
-    }
-
-    return new Date(right.createdAt) - new Date(left.createdAt);
-  });
-
-const notePreview = (content) => {
-  if (!content) return 'No preview available yet.';
-  return content.length > 160 ? `${content.slice(0, 160)}...` : content;
-};
-
-function App() {
-  const storedSession = restoreSession();
-  const [mode, setMode] = useState(storedSession.token ? 'dashboard' : 'login');
-  const [authForm, setAuthForm] = useState(emptyAuth);
-  const [token, setToken] = useState(storedSession.token);
-  const [session, setSession] = useState(storedSession.user);
-  const [profile, setProfile] = useState(null);
-  const [profileForm, setProfileForm] = useState(emptyProfile);
-  const [notes, setNotes] = useState([]);
+  const [mode, setMode] = useState('dashboard'); // 'dashboard' | 'login'
   const [selectedId, setSelectedId] = useState(null);
   const [selectionInitialized, setSelectionInitialized] = useState(false);
-  const [noteForm, setNoteForm] = useState(emptyNote);
   const [view, setView] = useState('active');
-  const [searchDraft, setSearchDraft] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(Boolean(storedSession.token));
-  const [submitting, setSubmitting] = useState(false);
+  const [searchDraft, setSearchDraft] = useState('');
   const [notice, setNotice] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const currentNote = useMemo(
-    () => notes.find((note) => note._id === selectedId) || null,
-    [notes, selectedId]
-  );
+  const currentNote = notes.find((note) => note._id === selectedId) || null;
 
-  const avatarSrc = profile?.avatarUrl?.trim() || '';
-
-  const stats = useMemo(() => {
-    const pinned = notes.filter((note) => note.isPinned).length;
-    const archived = notes.filter((note) => note.isArchived).length;
-    return {
-      total: notes.length,
-      pinned,
-      archived,
-      active: Math.max(notes.length - archived, 0),
-    };
-  }, [notes]);
-
-  const showError = (error) => {
-    setNotice({ type: 'error', text: error.message || 'Something went wrong' });
+  const stats = {
+    total: notes.length,
+    pinned: notes.filter((note) => note.isPinned).length,
+    archived: notes.filter((note) => note.isArchived).length,
+    active: notes.filter((note) => !note.isArchived).length,
   };
 
-  const showSuccess = (text) => {
+  const showError = useCallback((message) => {
+    setNotice({ type: 'error', text: message });
+  }, []);
+
+  const showSuccess = useCallback((text) => {
     setNotice({ type: 'success', text });
-  };
+  }, []);
 
-  const loadDashboard = async (nextView = view, nextSearch = searchTerm) => {
-    if (!token) return;
-
-    const trimmedSearch = nextSearch.trim();
-
-    if (trimmedSearch) {
-      const response = await request(
-        `/api/notes/search?query=${encodeURIComponent(trimmedSearch)}&page=1&limit=50`,
-        { token }
-      );
-      const searchNotes = sortNotes(response.data || []);
-      setNotes(searchNotes);
-      if (searchNotes.length && !selectionInitialized) {
-        setSelectedId(searchNotes[0]._id);
-        setSelectionInitialized(true);
-      }
-      return;
-    }
-
-    const loadActive = async () => {
-      const response = await request('/api/notes?page=1&limit=50&archived=false', { token });
-      return response.data || [];
-    };
-
-    const loadArchived = async () => {
-      const response = await request('/api/notes?page=1&limit=50&archived=true', { token });
-      return response.data || [];
-    };
-
-    let combined = [];
-    if (nextView === 'active') {
-      combined = await loadActive();
-    } else if (nextView === 'archived') {
-      combined = await loadArchived();
-    } else {
-      const [activeNotes, archivedNotes] = await Promise.all([loadActive(), loadArchived()]);
-      combined = [...activeNotes, ...archivedNotes];
-    }
-
-    const sorted = sortNotes(combined);
-    setNotes(sorted);
-
-    if (!selectionInitialized && sorted.length) {
-      setSelectedId(sorted[0]._id);
-      setSelectionInitialized(true);
-      return;
-    }
-
-    if (selectedId && !sorted.some((note) => note._id === selectedId)) {
-      setSelectedId(sorted[0]?._id || null);
-    }
-  };
-
-  const bootstrap = async (currentToken) => {
-    setLoading(true);
-    try {
-      const [me, profileResponse] = await Promise.all([
-        request('/api/auth/me', { token: currentToken }),
-        request('/api/users/profile', { token: currentToken }),
-      ]);
-
-      const nextUser = me.data || null;
-      setSession(nextUser);
-      saveSession(currentToken, nextUser);
-
-      const profileData = profileResponse.data || {};
-      setProfile(profileData);
-      setProfileForm({
-        fullName: profileData.fullName || '',
-        bio: profileData.bio || '',
-        avatarUrl: profileData.avatarUrl || '',
-      });
-
-      await loadDashboard();
-      setMode('dashboard');
-      showSuccess('Session restored successfully.');
-    } catch (error) {
-      clearSession();
-      setToken('');
-      setSession(null);
-      setProfile(null);
-      setProfileForm(emptyProfile);
-      setNotes([]);
-      setSelectedId(null);
-      setSearchTerm('');
-      setSearchDraft('');
-      setMode('login');
-      showError(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Initialize dashboard when token changes
   useEffect(() => {
     if (!token) {
       setMode('login');
       return;
     }
-
-    void bootstrap(token);
+    setMode('dashboard');
   }, [token]);
 
+  // Auto-select first note when notes load
   useEffect(() => {
-    if (!currentNote) {
-      setNoteForm(emptyNote);
+    if (!selectionInitialized && notes.length > 0 && !selectedId) {
+      setSelectedId(notes[0]._id);
+      setSelectionInitialized(true);
+    }
+  }, [notes, selectionInitialized, selectedId]);
+
+  // Reset selection if selected note is no longer in list
+  useEffect(() => {
+    if (selectedId && !notes.some((note) => note._id === selectedId)) {
+      setSelectedId(notes[0]?._id || null);
+      setSelectionInitialized(false);
+    }
+  }, [notes, selectedId]);
+
+  const loadDashboard = useCallback(async (nextView = view, nextSearch = searchTerm) => {
+    if (!token) return;
+
+    const trimmedSearch = nextSearch.trim();
+
+    if (trimmedSearch) {
+      try {
+        const searchResults = await searchNotes(trimmedSearch, { page: 1, limit: 50 });
+        const sorted = sortNotes(searchResults);
+        // Notes are updated via useNotes hook
+        if (sorted.length && !selectionInitialized) {
+          setSelectedId(sorted[0]._id);
+          setSelectionInitialized(true);
+        }
+      } catch (err) {
+        showError(err.message);
+      }
       return;
     }
 
-    setNoteForm({
-      title: currentNote.title || '',
-      content: currentNote.content || '',
-      tags: Array.isArray(currentNote.tags) ? currentNote.tags.join(', ') : '',
-    });
-  }, [currentNote]);
-
-  const handleAuthSubmit = async (event) => {
-    event.preventDefault();
-    setSubmitting(true);
-    try {
-      const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      const payload =
-        mode === 'register'
-          ? authForm
-          : {
-              email: authForm.email,
-              password: authForm.password,
-            };
-
-      const response = await request(endpoint, {
-        method: 'POST',
-        body: payload,
-      });
-
-      const nextToken = response.data?.token;
-      const nextUser = response.data?.user || null;
-
-      if (!nextToken) {
-        throw new Error('Authentication response did not include a token.');
-      }
-
-      setToken(nextToken);
-      setSession(nextUser);
-      saveSession(nextToken, nextUser);
-      setMode('dashboard');
-      setAuthForm(emptyAuth);
-      showSuccess(mode === 'register' ? 'Account created successfully.' : 'Logged in successfully.');
-    } catch (error) {
-      showError(error);
-    } finally {
-      setSubmitting(false);
+    // Update view params
+    if (nextView === 'active') {
+      setArchived(false);
+    } else if (nextView === 'archived') {
+      setArchived(true);
+    } else {
+      // For 'all' view, we'll fetch both and combine
+      // This is handled by the useNotes hook with archived: undefined
     }
-  };
+  }, [token, view, searchTerm, searchNotes, setArchived, selectionInitialized, showError]);
 
-  const handleLogout = async () => {
-    try {
-      await request('/api/auth/logout', { method: 'POST', token });
-    } catch {
-      // Logging out locally should still succeed even if the gateway is unavailable.
-    }
-
-    clearSession();
-    setToken('');
-    setSession(null);
-    setProfile(null);
-    setProfileForm(emptyProfile);
-    setNotes([]);
-    setSelectedId(null);
-    setSelectionInitialized(false);
-    setSearchTerm('');
-    setSearchDraft('');
-    setMode('login');
-    showSuccess('Logged out.');
-  };
-
-  const refreshNotes = async (nextView = view, nextSearch = searchTerm) => {
-    if (!token) return;
-    await loadDashboard(nextView, nextSearch);
-  };
-
-  const handleViewChange = async (nextView) => {
+  const handleViewChange = useCallback(async (nextView) => {
     setView(nextView);
     setSearchTerm('');
     setSearchDraft('');
-    await refreshNotes(nextView, '');
-  };
+    await loadDashboard(nextView, '');
+  }, [loadDashboard]);
 
-  const handleSearchSubmit = async (event) => {
+  const handleSearchSubmit = useCallback(async (event) => {
     event.preventDefault();
     const trimmed = searchDraft.trim();
     setSearchTerm(trimmed);
-    await refreshNotes(view, trimmed);
-  };
+    await loadDashboard(view, trimmed);
+  }, [searchDraft, loadDashboard, view]);
 
-  const handleClearSearch = async () => {
+  const handleClearSearch = useCallback(async () => {
     setSearchDraft('');
     setSearchTerm('');
-    await refreshNotes(view, '');
-  };
+    await loadDashboard(view, '');
+  }, [loadDashboard, view]);
 
-  const handleNoteSave = async (event) => {
-    event.preventDefault();
+  const handleNoteSave = useCallback(async (noteIdOrData, data) => {
     if (!token) return;
 
-    const payload = {
-      title: noteForm.title,
-      content: noteForm.content,
-      tags: toTagsArray(noteForm.tags),
-    };
-
     setSubmitting(true);
     try {
-      if (currentNote) {
-        await request(`/api/notes/${currentNote._id}`, {
-          method: 'PUT',
-          token,
-          body: {
-            ...payload,
-            isPinned: currentNote.isPinned,
-            isArchived: currentNote.isArchived,
-          },
-        });
+      if (noteIdOrData && typeof noteIdOrData === 'object' && noteIdOrData._id) {
+        // Update existing note
+        await updateNote(noteIdOrData._id, data);
         showSuccess('Note updated.');
       } else {
-        const response = await request('/api/notes', {
-          method: 'POST',
-          token,
-          body: payload,
-        });
-
-        setSelectedId(response.data?._id || null);
+        // Create new note
+        await createNote(data);
         showSuccess('Note created.');
       }
-
       setSearchTerm('');
       setSearchDraft('');
-      await refreshNotes('all', '');
+      await loadDashboard('all', '');
       setView('all');
     } catch (error) {
-      showError(error);
+      showError(error.message);
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [token, createNote, updateNote, loadDashboard, showSuccess, showError]);
 
-  const updateNoteFlags = async (note, patch) => {
+  const handleUpdateNoteFlags = useCallback(async (note, patch) => {
+    if (!token) return;
+
     setSubmitting(true);
     try {
-      await request(`/api/notes/${note._id}`, {
-        method: 'PUT',
-        token,
-        body: {
-          title: note.title,
-          content: note.content,
-          tags: Array.isArray(note.tags) ? note.tags : [],
-          isPinned: patch.isPinned ?? note.isPinned,
-          isArchived: patch.isArchived ?? note.isArchived,
-        },
+      await updateNote(note._id, {
+        title: note.title,
+        content: note.content,
+        tags: Array.isArray(note.tags) ? note.tags : [],
+        isPinned: patch.isPinned ?? note.isPinned,
+        isArchived: patch.isArchived ?? note.isArchived,
       });
       showSuccess('Note updated.');
-      await refreshNotes();
+      await loadDashboard();
     } catch (error) {
-      showError(error);
+      showError(error.message);
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [token, updateNote, loadDashboard, showSuccess, showError]);
 
-  const handleDeleteNote = async (note) => {
-    const confirmed = window.confirm(`Delete \"${note.title}\"? This cannot be undone.`);
+  const handleDeleteNote = useCallback(async (note) => {
+    if (!token) return;
+
+    const confirmed = window.confirm(`Delete "${note.title}"? This cannot be undone.`);
     if (!confirmed) return;
 
     setSubmitting(true);
     try {
-      await request(`/api/notes/${note._id}`, {
-        method: 'DELETE',
-        token,
-      });
+      await deleteNote(note._id);
       if (selectedId === note._id) {
         setSelectedId(null);
       }
       showSuccess('Note deleted.');
-      await refreshNotes();
+      await loadDashboard();
     } catch (error) {
-      showError(error);
+      showError(error.message);
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [token, deleteNote, selectedId, loadDashboard, showSuccess, showError]);
 
-  const handleProfileSave = async (event) => {
-    event.preventDefault();
+  const handleProfileSave = useCallback(async (profileData) => {
     if (!token) return;
 
     setSubmitting(true);
     try {
-      const response = await request('/api/users/profile', {
-        method: 'PUT',
-        token,
-        body: {
-          fullName: profileForm.fullName,
-          bio: profileForm.bio,
-          avatarUrl: profileForm.avatarUrl,
-        },
-      });
-
-      setProfile(response.data || null);
+      const updatedProfile = await updateProfile(profileData);
+      if (profileData.fullName && user) {
+        updateUser({ username: profileData.fullName });
+      }
       showSuccess('Profile updated.');
     } catch (error) {
-      showError(error);
+      showError(error.message);
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [token, updateProfile, user, updateUser, showSuccess, showError]);
 
-  const metrics = [
-    { label: 'Total notes', value: stats.total },
-    { label: 'Pinned', value: stats.pinned },
-    { label: 'Active', value: stats.active },
-    { label: 'Archived', value: stats.archived },
-  ];
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+    } catch {
+      // Ignore logout errors
+    }
+    showSuccess('Logged out.');
+  }, [logout, showSuccess]);
 
+  // Render loading state
+  if (authLoading) {
+    return (
+      <div className="shell">
+        <div className="ambient ambient-a" />
+        <div className="ambient ambient-b" />
+        <main className="layout">
+          <div className="panel loading-panel">
+            <p>Loading your workspace...</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Render login/register
+  if (!isAuthenticated) {
+    return (
+      <div className="shell">
+        <div className="ambient ambient-a" />
+        <div className="ambient ambient-b" />
+
+        <header className="hero">
+          <div>
+            <p className="eyebrow">Notely</p>
+            <h1>Notes and profiles in one clean dashboard.</h1>
+            <p className="hero-copy">
+              Your one-stop solution for all note-taking needs.
+            </p>
+          </div>
+          <div className="hero-side hero-art-wrap" aria-hidden="true">
+            <img className="hero-art" src="/note-image.png" alt="" />
+          </div>
+        </header>
+
+        <main className="layout">
+          <section className="content-stack">
+            <AuthPanel />
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  // Render dashboard
   return (
     <div className="shell">
       <div className="ambient ambient-a" />
@@ -425,12 +299,9 @@ function App() {
             Your one-stop solution for all note-taking needs.
           </p>
         </div>
-
         <div className="hero-side hero-art-wrap" aria-hidden="true">
           <img className="hero-art" src="/note-image.png" alt="" />
         </div>
-
-
       </header>
 
       {notice && (
@@ -444,350 +315,76 @@ function App() {
 
       <main className="layout">
         <section className="content-stack">
-          {!token ? (
-            <div className="panel auth-panel">
-              <div className="panel-header auth-header">
-                <div>
-                  <span className="section-label">Access</span>
-                  <h2>{mode === 'register' ? 'Create an account' : 'Welcome back'}</h2>
-                </div>
-                <div className="switcher">
-                  <button
-                    type="button"
-                    className={mode === 'login' ? 'switch active' : 'switch'}
-                    onClick={() => setMode('login')}
-                  >
-                    Login
-                  </button>
-                  <button
-                    type="button"
-                    className={mode === 'register' ? 'switch active' : 'switch'}
-                    onClick={() => setMode('register')}
-                  >
-                    Register
-                  </button>
-                </div>
+          <div className="panel metrics-panel">
+            <div className="panel-header">
+              <div>
+                <span className="section-label">Overview</span>
+                <h2>Your workspace</h2>
               </div>
-
-              <form className="form-grid" onSubmit={handleAuthSubmit}>
-                <label>
-                  <span>Email</span>
-                  <input
-                    type="email"
-                    required
-                    value={authForm.email}
-                    onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })}
-                    placeholder="you@example.com"
-                  />
-                </label>
-
-                {mode === 'register' && (
-                  <label>
-                    <span>Username</span>
-                    <input
-                      type="text"
-                      required
-                      value={authForm.username}
-                      onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })}
-                      placeholder="your-handle"
-                    />
-                  </label>
-                )}
-
-                <label>
-                  <span>Password</span>
-                  <input
-                    type="password"
-                    required
-                    minLength={8}
-                    value={authForm.password}
-                    onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })}
-                    placeholder="8+ characters"
-                  />
-                </label>
-
-                <button className="primary-button" type="submit" disabled={submitting}>
-                  {submitting ? 'Working...' : mode === 'register' ? 'Create account' : 'Login'}
-                </button>
-              </form>
+              <button type="button" className="ghost-button danger" onClick={handleLogout}>
+                Logout
+              </button>
             </div>
-          ) : loading ? (
-            <div className="panel loading-panel">
-              <p>Loading your workspace...</p>
+
+            <div className="metrics-grid">
+              <div className="metric-card"><strong>Total notes: {stats.total}</strong></div>
+              <div className="metric-card"><strong>Pinned: {stats.pinned}</strong></div>
+              <div className="metric-card"><strong>Active: {stats.active}</strong></div>
+              <div className="metric-card"><strong>Archived: {stats.archived}</strong></div>
             </div>
-          ) : (
-            <>
-              <div className="panel metrics-panel">
-                <div className="panel-header">
-                  <div>
-                    <span className="section-label">Overview</span>
-                    <h2>Your workspace</h2>
-                  </div>
-                  <button type="button" className="ghost-button danger" onClick={handleLogout}>
-                    Logout
-                  </button>
-                </div>
+          </div>
 
-                <div className="metrics-grid">
-                  {metrics.map((metric) => (
-                    <div className="metric-card" key={metric.label}>
-                      <strong>{metric.label}: {metric.value}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
+          <NotesList
+            notes={notes}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onPin={(note, isPinned) => handleUpdateNoteFlags(note, { isPinned })}
+            onArchive={(note, isArchived) => handleUpdateNoteFlags(note, { isArchived })}
+            onDelete={handleDeleteNote}
+            view={view}
+            onViewChange={handleViewChange}
+            searchTerm={searchTerm}
+            onSearch={handleSearchSubmit}
+            onClearSearch={handleClearSearch}
+            loading={notesLoading}
+            disabled={submitting}
+          />
 
-              <div className="panel">
-                <div className="panel-header">
-                  <div>
-                    <span className="section-label">Browse</span>
-                    <h2>Notes and filters</h2>
-                  </div>
-                  <div className="switcher">
-                    {viewOptions.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={view === option.value && !searchTerm ? 'switch active' : 'switch'}
-                        onClick={() => void handleViewChange(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <form className="search-row" onSubmit={handleSearchSubmit}>
-                  <input
-                    type="search"
-                    value={searchDraft}
-                    onChange={(event) => setSearchDraft(event.target.value)}
-                    placeholder="Search titles, content, and tags"
-                  />
-                  <button type="submit" className="primary-button">
-                    Search
-                  </button>
-                  {searchTerm && (
-                    <button type="button" className="ghost-button" onClick={() => void handleClearSearch()}>
-                      Clear
-                    </button>
-                  )}
-                </form>
-
-                <div className="notes-list">
-                  {notes.length === 0 ? (
-                    <div className="empty-state">
-                      <h3>No notes yet.</h3>
-                      <p>Create your first note to start organizing ideas, study material, or tasks.</p>
-                    </div>
-                  ) : (
-                    notes.map((note) => (
-                      <button
-                        key={note._id}
-                        type="button"
-                        className={note._id === selectedId ? 'note-card active' : 'note-card'}
-                        onClick={() => setSelectedId(note._id)}
-                      >
-                        <div className="note-card-head">
-                          <strong>{note.title}</strong>
-                          <div className="note-badges">
-                            {note.isPinned && <span className="pill pill-accent">Pinned</span>}
-                            {note.isArchived && <span className="pill pill-danger">Archived</span>}
-                          </div>
-                        </div>
-                        <p>{notePreview(note.content)}</p>
-                        <div className="note-footer">
-                          <span>{formatDate(note.updatedAt || note.createdAt)}</span>
-                          <span>{Array.isArray(note.tags) ? note.tags.join(' • ') : ''}</span>
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div className="panel editor-panel">
-                <div className="panel-header">
-                  <div>
-                    <span className="section-label">Editor</span>
-                    <h2>{currentNote ? 'Edit selected note' : 'Create a new note'}</h2>
-                  </div>
-                  <div className="editor-actions">
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => {
-                        setSelectedId(null);
-                        setNoteForm(emptyNote);
-                      }}
-                    >
-                      New note
-                    </button>
-                    {currentNote && (
-                      <>
-                        <button
-                          type="button"
-                          className="ghost-button"
-                          onClick={() => void updateNoteFlags(currentNote, { isPinned: !currentNote.isPinned })}
-                          disabled={submitting}
-                        >
-                          {currentNote.isPinned ? 'Unpin' : 'Pin'}
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost-button"
-                          onClick={() => void updateNoteFlags(currentNote, { isArchived: !currentNote.isArchived })}
-                          disabled={submitting}
-                        >
-                          {currentNote.isArchived ? 'Unarchive' : 'Archive'}
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost-button danger"
-                          onClick={() => void handleDeleteNote(currentNote)}
-                          disabled={submitting}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <form className="editor-form" onSubmit={handleNoteSave}>
-                  <label>
-                    <span>Title</span>
-                    <input
-                      type="text"
-                      required
-                      value={noteForm.title}
-                      onChange={(event) => setNoteForm({ ...noteForm, title: event.target.value })}
-                      placeholder="Study plan, meeting notes, quick idea..."
-                    />
-                  </label>
-
-                  <label>
-                    <span>Content</span>
-                    <textarea
-                      required
-                      rows={10}
-                      value={noteForm.content}
-                      onChange={(event) => setNoteForm({ ...noteForm, content: event.target.value })}
-                      placeholder="Capture the idea, add checklists, or draft the next step."
-                    />
-                  </label>
-
-                  <label>
-                    <span>Tags</span>
-                    <input
-                      type="text"
-                      value={noteForm.tags}
-                      onChange={(event) => setNoteForm({ ...noteForm, tags: event.target.value })}
-                      placeholder="study, project, ideas"
-                    />
-                  </label>
-
-                  <button type="submit" className="primary-button" disabled={submitting}>
-                    {submitting ? 'Saving...' : currentNote ? 'Update note' : 'Create note'}
-                  </button>
-                </form>
-              </div>
-            </>
-          )}
+          <NoteEditor
+            currentNote={currentNote}
+            onSave={handleNoteSave}
+            onNew={() => {
+              setSelectedId(null);
+              setSelectionInitialized(false);
+            }}
+            onPin={(note, isPinned) => handleUpdateNoteFlags(note, { isPinned })}
+            onArchive={(note, isArchived) => handleUpdateNoteFlags(note, { isArchived })}
+            onDelete={handleDeleteNote}
+            submitting={submitting}
+            disabled={submitting}
+          />
         </section>
 
         <aside className="sidebar">
-          <div className="panel profile-panel">
-            <div className="panel-header">
-              <div>
-                <span className="section-label">Profile</span>
-                <h2>User details</h2>
-              </div>
-            </div>
-
-            <div className="profile-summary">
-              {avatarSrc ? (
-                <img
-                  className="avatar avatar-image"
-                  src={avatarSrc}
-                  alt={`${session?.username || 'User'} avatar`}
-                />
-              ) : (
-                <div className="avatar">{session?.username?.slice(0, 1)?.toUpperCase() || 'N'}</div>
-              )}
-              <div>
-                <strong>{session?.username || 'Guest'}</strong>
-                <p>{session?.email || 'Sign in to manage your profile.'}</p>
-              </div>
-            </div>
-
-            <form className="form-grid profile-form" onSubmit={handleProfileSave}>
-              <label>
-                <span>Full name</span>
-                <input
-                  type="text"
-                  value={profileForm.fullName}
-                  onChange={(event) => setProfileForm({ ...profileForm, fullName: event.target.value })}
-                  placeholder="Your display name"
-                />
-              </label>
-
-              <label>
-                <span>Avatar URL</span>
-                <input
-                  type="url"
-                  value={profileForm.avatarUrl}
-                  onChange={(event) => setProfileForm({ ...profileForm, avatarUrl: event.target.value })}
-                  placeholder="https://..."
-                />
-              </label>
-
-              <label>
-                <span>Bio</span>
-                <textarea
-                  rows={5}
-                  value={profileForm.bio}
-                  onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })}
-                  placeholder="A short intro for your note workspace"
-                />
-              </label>
-
-              <button type="submit" className="primary-button" disabled={submitting}>
-                {submitting ? 'Saving...' : 'Save profile'}
-              </button>
-            </form>
-          </div>
-
-          <div className="panel">
-            <div className="panel-header">
-              <div>
-                <span className="section-label">Current profile</span>
-                <h2>Stored user data</h2>
-              </div>
-            </div>
-            <div className="detail-list">
-              <div>
-                <span>Full name</span>
-                <strong>{profile?.fullName || 'Not set yet'}</strong>
-              </div>
-              <div>
-                <span>Bio</span>
-                <strong>{profile?.bio || 'No bio yet'}</strong>
-              </div>
-              <div>
-                <span>Avatar</span>
-                {avatarSrc ? (
-                  <img className="avatar-preview" src={avatarSrc} alt="Stored profile avatar" />
-                ) : (
-                  <strong>No avatar stored</strong>
-                )}
-              </div>
-            </div>
-          </div>
+          <ProfilePanel
+            profile={profile}
+            onUpdateProfile={handleProfileSave}
+            submitting={submitting}
+            disabled={submitting}
+          />
         </aside>
       </main>
     </div>
   );
-}
+};
+
+// Main App wrapper with AuthProvider
+const App = () => {
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
+  );
+};
 
 export default App;

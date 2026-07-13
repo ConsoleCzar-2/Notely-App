@@ -1,5 +1,10 @@
-const TOKEN_KEY = 'notely.token';
-const USER_KEY = 'notely.user';
+/**
+ * Utility functions for the frontend
+ */
+
+export const TOKEN_KEY = 'notely.token';
+export const USER_KEY = 'notely.user';
+export const REFRESH_TOKEN_KEY = 'notely.refreshToken';
 
 export const restoreSession = () => {
   if (typeof window === 'undefined') {
@@ -24,6 +29,7 @@ export const saveSession = (token, user) => {
 export const clearSession = () => {
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
 };
 
 export const toTagsArray = (tags) =>
@@ -32,46 +38,65 @@ export const toTagsArray = (tags) =>
     .map((tag) => tag.trim())
     .filter(Boolean);
 
-export const formatDate = (value) => {
-  if (!value) return 'Unknown';
-  return new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value));
-};
+// API base URL
+const API_BASE = '/api/v1';
 
-export const request = async (path, options = {}) => {
-  const { token, body, method = 'GET' } = options;
+// Helper function for making authenticated requests
+const request = async (endpoint, options = {}) => {
+  const token = localStorage.getItem(TOKEN_KEY);
   const headers = {
-    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    ...(token && { Authorization: `Bearer ${token}` }),
+    ...options.headers,
   };
 
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  let payload;
-  if (body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-    payload = JSON.stringify(body);
-  }
-
-  const response = await fetch(path, {
-    method,
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
     headers,
-    body: payload,
   });
 
-  const contentType = response.headers.get('content-type') || '';
-  const data = contentType.includes('application/json')
-    ? await response.json()
-    : { message: await response.text() };
-
   if (!response.ok) {
-    throw new Error(data.message || `Request failed with status ${response.status}`);
+    const error = await response.json().catch(() => ({ message: 'Request failed' }));
+    throw new Error(error.message || `HTTP ${response.status}`);
   }
 
-  return data;
+  return response.json();
+};
+
+// Auth API
+export const authApi = {
+  register: (data) => request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+  login: (data) => request('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+  logout: (token, refreshToken) => request('/auth/logout', { method: 'POST', body: JSON.stringify({ token, refreshToken }) }),
+  refreshToken: (refreshToken) => request('/auth/refresh', { method: 'POST', body: JSON.stringify({ refreshToken }) }),
+  verifyToken: (token) => request('/auth/verify', { method: 'POST', body: JSON.stringify({ token }) }),
+};
+
+// Notes API - matches useNotes hook expectations
+export const notesApi = {
+  getNotes: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/notes${query ? `?${query}` : ''}`);
+  },
+  getNote: (id) => request(`/notes/${id}`),
+  createNote: (data) => request('/notes', { method: 'POST', body: JSON.stringify(data) }),
+  updateNote: (id, data) => request(`/notes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteNote: (id) => request(`/notes/${id}`, { method: 'DELETE' }),
+  searchNotes: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/notes/search?${query}`);
+  },
+  bulkAction: (data) => request('/notes/bulk', { method: 'POST', body: JSON.stringify(data) }),
+};
+
+// Profile/User API - matches useProfile hook expectations (exported as usersApi)
+export const usersApi = {
+  getProfile: () => request('/profile'),
+  updateProfile: (data) => request('/profile', { method: 'PUT', body: JSON.stringify(data) }),
+};
+
+// Also export as userApi for consistency
+export const userApi = {
+  get: (id) => request(`/users/${id}`),
+  update: (id, data) => request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 };

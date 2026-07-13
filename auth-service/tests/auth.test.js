@@ -1,25 +1,36 @@
 const request = require('supertest');
 const app = require('../src/index');
+const { pool } = require('../src/config/db');
 
 // ─── Auth Routes Tests ────────────────────────────────────────────────────────
+let authToken;
+let testUser;
+
+beforeAll(async () => {
+  // Create a unique test user for login/verify tests
+  testUser = {
+    email: `test_${Date.now()}@example.com`,
+    username: `testuser_${Date.now()}`,
+    password: 'Password123',
+  };
+  await request(app).post('/auth/register').send(testUser);
+});
 
 describe('Auth Service', () => {
-  const testUser = {
-    email: 'test@example.com',
-    username: 'testuser',
-    password: 'password123',
-  };
-
-  let authToken;
-
   // ─── Register ───────────────────────────────────────────────────────────────
   describe('POST /auth/register', () => {
     it('should register a new user', async () => {
-      const res = await request(app).post('/auth/register').send(testUser);
+      const uniqueUser = {
+        email: `new_${Date.now()}@example.com`,
+        username: `newuser_${Date.now()}`,
+        password: 'Password123',
+      };
+      const res = await request(app).post('/auth/register').send(uniqueUser);
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.token).toBeDefined();
-      expect(res.body.data.user.email).toBe(testUser.email);
+      expect(res.body.data.accessToken).toBeDefined();
+      expect(res.body.data.refreshToken).toBeDefined();
+      expect(res.body.data.user.email).toBe(uniqueUser.email);
     });
 
     it('should reject duplicate email', async () => {
@@ -48,8 +59,9 @@ describe('Auth Service', () => {
         .post('/auth/login')
         .send({ email: testUser.email, password: testUser.password });
       expect(res.status).toBe(200);
-      expect(res.body.data.token).toBeDefined();
-      authToken = res.body.data.token;
+      expect(res.body.data.accessToken).toBeDefined();
+      expect(res.body.data.refreshToken).toBeDefined();
+      authToken = res.body.data.accessToken;
     });
 
     it('should reject wrong password', async () => {
@@ -98,4 +110,9 @@ describe('Auth Service', () => {
       expect(res.body.status).toBe('healthy');
     });
   });
+});
+
+// ─── Cleanup ──────────────────────────────────────────────────────────────────
+afterAll(async () => {
+  await pool.end();
 });

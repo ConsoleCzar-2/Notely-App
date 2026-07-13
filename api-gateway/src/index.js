@@ -1,23 +1,57 @@
 const express = require('express');
 const morgan = require('morgan');
+const compression = require('compression');
+const cors = require('cors');
 const { globalLimiter } = require('./middleware/rateLimiter');
 const { errorHandler } = require('./middleware/errorHandler');
+const { requestIdMiddleware } = require('./middleware/requestId');
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
 const notesRoutes = require('./routes/notes.routes');
 const config = require('./config');
 const logger = require('./utils/logger');
 const { getFullHealthStatus } = require('./utils/healthCheck');
+const { metricsMiddleware, metricsHandler } = require('./utils/metrics');
+const { swaggerSpec, swaggerUi, swaggerUiOptions } = require('./config/swagger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ─── CORS Configuration ───────────────────────────────────────────────────────
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  exposedHeaders: ['X-Request-ID'],
+  maxAge: 86400, // 24 hours
+};
+app.use(cors(corsOptions));
+
 // ─── Core Middleware ──────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
+app.use(compression());
 app.use(globalLimiter);
+app.use(requestIdMiddleware);
+app.use(metricsMiddleware);
 
 // ─── Health Checks ────────────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /:
+ *   get:
+ *     tags: [Health]
+ *     summary: Gateway landing page
+ *     description: Returns an HTML landing page describing the gateway.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: HTML landing page
+ *         content:
+ *           text/html:
+ *             schema: { type: string }
+ */
 app.get('/', (req, res) => {
   res.type('html').send(`
     <!doctype html>
@@ -124,7 +158,7 @@ app.get('/', (req, res) => {
             </div>
             <div class="tile">
               <strong>API Routes</strong>
-              <a href="/api/auth">/api/auth</a>, <a href="/api/users">/api/users</a>, <a href="/api/notes">/api/notes</a>
+              <a href="/api/v1/auth">/api/v1/auth</a>, <a href="/api/v1/users">/api/v1/users</a>, <a href="/api/v1/notes">/api/v1/notes</a>
             </div>
           </div>
         </main>
@@ -133,6 +167,21 @@ app.get('/', (req, res) => {
   `);
 });
 
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     tags: [Health]
+ *     summary: Gateway health check
+ *     description: Returns the gateway's own health status and upstream service URLs.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Gateway is healthy
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/HealthCheck' }
+ */
 app.get('/health', (req, res) => {
   res.json({
     service: 'api-gateway',
@@ -146,16 +195,93 @@ app.get('/health', (req, res) => {
   });
 });
 
+/**
+ * @openapi
+ * /health/all:
+ *   get:
+ *     tags: [Health]
+ *     summary: Aggregate health check
+ *     description: Pings all downstream services and returns the complete system status.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: All services healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 allHealthy: { type: boolean, example: true }
+ *                 services:
+ *                   type: object
+ *                   properties:
+ *                     auth: { type: object }
+ *                     user: { type: object }
+ *                     notes: { type: object }
+ *       503:
+ *         description: One or more services unhealthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 allHealthy: { type: boolean, example: false }
+ *                 services: { type: object }
+ */
 // Aggregate health — pings all downstream services and returns complete system status
 app.get('/health/all', async (req, res) => {
   const healthStatus = await getFullHealthStatus(config);
   res.status(healthStatus.allHealthy ? 200 : 503).json(healthStatus);
 });
 
+// ─── Prometheus Metrics ───────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /metrics:
+ *   get:
+ *     tags: [Metrics]
+ *     summary: Prometheus metrics
+ *     description: Returns Prometheus-format metrics for the gateway.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Prometheus metrics in text format
+ *         content:
+ *           text/plain:
+ *             schema: { type: string }
+ */
+app.get('/metrics', metricsHandler);
+/**
+ * @openapi
+ * /metrics/json:
+ *   get:
+ *     tags: [Metrics]
+ *     summary: Prometheus metrics (JSON)
+ *     description: Returns gateway metrics in JSON format.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Metrics in JSON format
+ *         content:
+ *           application/json:
+ *             schema: { type: object }
+ */
+app.get('/metrics/json', async (req, res) => {
+  const { metricsJsonHandler } = require('./utils/metrics');
+  await metricsJsonHandler(req, res);
+});
+
+// ─── Swagger API Documentation ────────────────────────────────────────────────
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, swaggerUiOptions));
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
+});
+
 // ─── API Routes ───────────────────────────────────────────────────────────────
-app.use('/api/auth',  authRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/notes', notesRoutes);
+app.use('/api/v1/auth',  authRoutes);
+app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/notes', notesRoutes);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
