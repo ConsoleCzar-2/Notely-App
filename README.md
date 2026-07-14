@@ -1,6 +1,6 @@
 # Notely
 
-A microservices-based online notes and study platform. The system is composed of a React single-page application fronted by nginx, an Express API gateway, and three backend services (auth, user, notes) backed by PostgreSQL, MongoDB, and Redis. All services are containerized with Docker and orchestrated via Docker Compose.
+A microservices-based online note taking platform. The system is composed of a React single-page application fronted by nginx, an Express API gateway, and three backend services (auth, user, notes) backed by PostgreSQL, MongoDB, and Redis. All services are containerized with Docker and orchestrated via Docker Compose.
 
 ---
 
